@@ -2,34 +2,45 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network permissions -->
+    <!-- ================= Permissions ================= -->
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Location permissions for GPS -->
+    <!-- Location (for injecting phone GPS into MAVLink).
+         If you only need coarse location you can drop FINE. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Service permissions -->
+    <!-- Foreground service (data sync). Add location type if using GPS in foreground. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- For Android 10+ specific foreground types (data sync already used below).
+         Uncomment if you send location updates while in foreground:
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- USB permissions -->
-    <uses-permission android:name="android.permission.USB_PERMISSION" />
-
-    <!-- Wake lock for maintaining connection -->
+    <!-- Wake lock to keep CPU alive during critical routing operations -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- USB host feature -->
+    <!-- Notifications (Android 13+) for foreground service visibility -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"
+        tools:targetApi="33" />
+
+    <!-- (No android.permission.USB_PERMISSION: access granted via device_filter + user dialog) -->
+
+    <!-- ================= Features ================= -->
+    <!-- USB Host (not strictly required on all devices; keep required=false for flexibility) -->
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
 
-    <!-- Location hardware features -->
+    <!-- GPS hardware (optional false lets app install on devices w/o GPS; set true if mandatory) -->
     <uses-feature
         android:name="android.hardware.location.gps"
         android:required="false" />
 
+    <!-- ================= Application ================= -->
     <application
         android:name=".RCBoatApplication"
         android:allowBackup="true"
@@ -40,36 +51,57 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.RCBoatGateway"
-        tools:targetApi="31">
+        android:usesCleartextTraffic="false"
+        tools:targetApi="34">
 
+        <!-- Main UI Activity (single declaration) -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.RCBoatGateway">
+
+            <!-- Launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
 
-        <!-- Foreground service for MAVLink routing -->
-        <service
-            android:name=".service.MavlinkService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!-- USB device attached intent filter -->
-        <activity
-            android:name=".ui.MainActivity"
-            android:exported="true">
+            <!-- USB device attached (lets activity receive intent when a supported USB device is plugged in) -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
+
+            <!-- Meta-data referencing XML device filter (defines vendor/product IDs) -->
             <meta-data
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/device_filter" />
         </activity>
+
+        <!-- Foreground service for continuous MAVLink routing -->
+        <service
+            android:name=".service.MavlinkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            tools:ignore="ForegroundServiceTypePermission" />
+        <!-- If you actively report live location in service, change to:
+             android:foregroundServiceType="dataSync|location"
+             AND ensure FOREGROUND_SERVICE_LOCATION permission is declared above. -->
+
+        <!-- (Optional) If you need a BroadcastReceiver for USB instead of activity-based intent:
+        <receiver android:name=".usb.UsbAttachReceiver">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </receiver>
+        -->
+
+        <!-- (Optional) If using WorkManager or Hilt entry points, no extra manifest needed. -->
 
     </application>
 
