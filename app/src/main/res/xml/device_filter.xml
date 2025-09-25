@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB device filter for STM32 devices -->
+    <usb-device vendor-id="1155" product-id="22336" />
+    <!-- Add other vendor/product IDs as needed -->
+    <!-- Generic CDC ACM devices -->
+    <usb-device class="2" />
+</resources>
