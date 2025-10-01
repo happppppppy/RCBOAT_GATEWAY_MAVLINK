@@ -80,15 +80,12 @@
                 android:resource="@xml/device_filter" />
         </activity>
 
-        <!-- Foreground service for continuous MAVLink routing -->
+        <!-- Foreground service for MQTT gateway -->
         <service
-            android:name=".service.MavlinkService"
+            android:name=".service.MqttGatewayService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:ignore="ForegroundServiceTypePermission" />
-        <!-- If you actively report live location in service, change to:
-             android:foregroundServiceType="dataSync|location"
-             AND ensure FOREGROUND_SERVICE_LOCATION permission is declared above. -->
 
         <!-- (Optional) If you need a BroadcastReceiver for USB instead of activity-based intent:
         <receiver android:name=".usb.UsbAttachReceiver">

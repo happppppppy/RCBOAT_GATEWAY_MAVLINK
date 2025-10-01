@@ -9,16 +9,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import com.rcboat.gateway.mavlink.ui.navigation.RCBoatNavigation
+import com.rcboat.gateway.mavlink.ui.screens.GatewayScreen
 import com.rcboat.gateway.mavlink.ui.theme.RCBoatGatewayTheme
 import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
 
 /**
- * Main activity for the RC Boat MAVLink Gateway application.
+ * Main activity for the MQTT Gateway application.
  * Handles permissions and sets up the main UI.
  */
 @AndroidEntryPoint
@@ -48,7 +47,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    RCBoatNavigation()
+                    GatewayScreen()
                 }
             }
         }
@@ -60,7 +59,7 @@ class MainActivity : ComponentActivity() {
     private fun checkAndRequestPermissions() {
         val permissionsToRequest = mutableListOf<String>()
         
-        // Location permissions for GPS
+        // Location permissions for GPS (optional - not needed for basic gateway)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) 
             != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
