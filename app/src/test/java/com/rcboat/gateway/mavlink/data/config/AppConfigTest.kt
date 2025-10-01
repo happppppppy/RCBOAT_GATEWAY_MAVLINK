@@ -1,6 +1,5 @@
 package com.rcboat.gateway.mavlink.data.config
 
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -12,11 +11,10 @@ class AppConfigTest {
     @Test
     fun `validate returns empty list for valid config`() {
         val config = AppConfig(
-            cloudHost = "test.example.com",
-            cloudPort = 5760,
-            secondaryUdpPort = 14550,
+            mqttBrokerAddress = "tcp://broker.hivemq.com:1883",
+            boatId = "sea_serpent_01",
             mavlinkBaud = 57600,
-            signingKeyHex = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+            reconnectDelayMs = 5000
         )
         
         val errors = config.validate()
@@ -24,23 +22,43 @@ class AppConfigTest {
     }
     
     @Test
-    fun `validate detects empty cloud host`() {
-        val config = AppConfig(cloudHost = "")
+    fun `validate detects empty MQTT broker address`() {
+        val config = AppConfig(mqttBrokerAddress = "")
         
         val errors = config.validate()
-        assertTrue("Expected cloud host error", errors.any { it.contains("Cloud host") })
+        assertTrue("Expected MQTT broker error", errors.any { it.contains("MQTT broker") })
     }
     
     @Test
-    fun `validate detects invalid port ranges`() {
-        val config = AppConfig(
-            cloudPort = 0,
-            secondaryUdpPort = 65536
-        )
+    fun `validate detects invalid MQTT broker protocol`() {
+        val config = AppConfig(mqttBrokerAddress = "http://broker.example.com:1883")
         
         val errors = config.validate()
-        assertTrue("Expected cloud port error", errors.any { it.contains("Cloud port") })
-        assertTrue("Expected UDP port error", errors.any { it.contains("UDP port") })
+        assertTrue("Expected protocol error", errors.any { it.contains("tcp://") || it.contains("ssl://") })
+    }
+    
+    @Test
+    fun `validate detects empty boat ID`() {
+        val config = AppConfig(boatId = "")
+        
+        val errors = config.validate()
+        assertTrue("Expected boat ID error", errors.any { it.contains("Boat ID") })
+    }
+    
+    @Test
+    fun `validate detects invalid boat ID characters`() {
+        val config = AppConfig(boatId = "invalid@boat#id")
+        
+        val errors = config.validate()
+        assertTrue("Expected boat ID character error", errors.any { it.contains("Boat ID") })
+    }
+    
+    @Test
+    fun `validate accepts valid boat ID with underscores and hyphens`() {
+        val config = AppConfig(boatId = "sea_serpent-01")
+        
+        val errors = config.validate()
+        assertFalse("Expected no boat ID error", errors.any { it.contains("Boat ID") })
     }
     
     @Test
@@ -52,45 +70,72 @@ class AppConfigTest {
     }
     
     @Test
-    fun `validate detects invalid signing key length`() {
-        val config = AppConfig(
-            signingEnabled = true,
-            signingKeyHex = "INVALID"
-        )
+    fun `validate accepts valid baud rates`() {
+        val validBaudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
+        
+        validBaudRates.forEach { baudRate ->
+            val config = AppConfig(mavlinkBaud = baudRate)
+            val errors = config.validate()
+            assertFalse("Expected no error for baud rate $baudRate", 
+                       errors.any { it.contains("baud rate") })
+        }
+    }
+    
+    @Test
+    fun `validate detects invalid reconnect delay`() {
+        val config = AppConfig(reconnectDelayMs = 500) // Too short
         
         val errors = config.validate()
-        assertTrue("Expected signing key error", errors.any { it.contains("Signing key") })
+        assertTrue("Expected reconnect delay error", errors.any { it.contains("Reconnect delay") })
     }
     
     @Test
-    fun `getSigningKey returns null when disabled`() {
-        val config = AppConfig(signingEnabled = false)
+    fun `validate detects excessive reconnect delay`() {
+        val config = AppConfig(reconnectDelayMs = 65000) // Too long
         
-        assertNull("Expected null signing key when disabled", config.getSigningKey())
+        val errors = config.validate()
+        assertTrue("Expected reconnect delay error", errors.any { it.contains("Reconnect delay") })
     }
     
     @Test
-    fun `getSigningKey returns null for invalid hex`() {
-        val config = AppConfig(
-            signingEnabled = true,
-            signingKeyHex = "INVALID_HEX"
-        )
+    fun `getFromVehicleTopic returns correct topic`() {
+        val config = AppConfig(boatId = "test_boat_123")
         
-        assertNull("Expected null signing key for invalid hex", config.getSigningKey())
+        val topic = config.getFromVehicleTopic()
+        assertEquals("boats/test_boat_123/from_vehicle", topic)
     }
     
     @Test
-    fun `getSigningKey returns correct bytes for valid hex`() {
-        val hexKey = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
-        val config = AppConfig(
-            signingEnabled = true,
-            signingKeyHex = hexKey
-        )
+    fun `getToVehicleTopic returns correct topic`() {
+        val config = AppConfig(boatId = "test_boat_123")
         
-        val key = config.getSigningKey()
-        assertNotNull("Expected valid signing key", key)
-        assertEquals("Expected 32 bytes", 32, key!!.size)
-        assertEquals("Expected correct first byte", 0x01, key[0])
-        assertEquals("Expected correct second byte", 0x23, key[1])
+        val topic = config.getToVehicleTopic()
+        assertEquals("boats/test_boat_123/to_vehicle", topic)
+    }
+    
+    @Test
+    fun `getStatusTopic returns correct topic`() {
+        val config = AppConfig(boatId = "test_boat_123")
+        
+        val topic = config.getStatusTopic()
+        assertEquals("boats/test_boat_123/status", topic)
+    }
+    
+    @Test
+    fun `ssl protocol is accepted`() {
+        val config = AppConfig(mqttBrokerAddress = "ssl://secure-broker.example.com:8883")
+        
+        val errors = config.validate()
+        assertFalse("Expected no protocol error for ssl://", 
+                   errors.any { it.contains("tcp://") || it.contains("ssl://") })
+    }
+    
+    @Test
+    fun `tcp protocol is accepted`() {
+        val config = AppConfig(mqttBrokerAddress = "tcp://broker.example.com:1883")
+        
+        val errors = config.validate()
+        assertFalse("Expected no protocol error for tcp://", 
+                   errors.any { it.contains("tcp://") || it.contains("ssl://") })
     }
 }
