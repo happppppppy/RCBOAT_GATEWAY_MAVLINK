@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <attr format="color" name="colorPrimary"/>
+    <attr format="color" name="colorSecondary"/>
+    <color name="colorPrimary">#6200EE</color>
+    <color name="colorSecondary">#03DAC5</color>
+    <color name="purple_500">#6200EE</color>
+    <color name="teal_200">#03DAC5</color>
     <string name="action_restart_service">Restart</string>
     <string name="action_stop_service">Stop</string>
     <string name="app_name">RC Boat MAVLink Gateway</string>
@@ -31,5 +37,12 @@
     <string name="transport_type_label">Transport Type</string>
     <string name="udp_status">Local UDP Mirror</string>
     <string name="usb_status">USB Connection</string>
-    <style name="Theme.RCBoatGateway" parent="android:Theme.Material.DayNight.NoActionBar"/>
+    <style name="Theme.MaterialComponents.DayNight.NoActionBar" parent="Theme.MaterialComponents.DayNight">
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorSecondary">@color/colorSecondary</item>
+    </style>
+    <style name="Theme.RCBoatGateway" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/purple_500</item>
+        <item name="colorSecondary">@color/teal_200</item>
+    </style>
 </resources>

@@ -146,6 +146,9 @@ class GatewayViewModel @Inject constructor(
                         it.copy(validationErrors = listOf("Failed to save: ${result.exception.message}"))
                     }
                 }
+                is com.rcboat.gateway.mavlink.util.Result.Loading -> {
+                    Timber.d("Saving configuration: loading")
+                }
             }
         }
     }
