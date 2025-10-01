@@ -1,23 +1,15 @@
 package com.rcboat.gateway.mavlink.data.mavlink
 
-import com.rcboat.gateway.mavlink.BuildConfig
-import com.rcboat.gateway.mavlink.security.SigningManager
-import io.dronefleet.mavlink.MavlinkConnection
-import io.dronefleet.mavlink.common.MavMessage
 import timber.log.Timber
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * MAVLink codec wrapper providing encoding/decoding and optional signing functionality.
- * Wraps the dronefleet MAVLink library with our application-specific features.
+ * MAVLink codec for parsing and handling MAVLink frames.
+ * Simplified version for raw byte forwarding in MQTT gateway.
  */
 @Singleton
-class MavlinkCodec @Inject constructor(
-    private val signingManager: SigningManager
-) {
+class MavlinkCodec @Inject constructor() {
     
     companion object {
         private const val MAV_STX_V1 = 0xFE.toByte()
@@ -75,59 +67,6 @@ class MavlinkCodec @Inject constructor(
             Timber.e(e, "Failed to decode MAVLink frame: %s", rawBytes.joinToString(" ") { "%02x".format(it) })
             null
         }
-    }
-    
-    /**
-     * Encodes a MAVLink message to raw bytes.
-     * Applies signing if enabled and configured.
-     */
-    fun encode(message: MavMessage, systemId: Int, componentId: Int): MavRawFrame? {
-        return try {
-            val outputStream = ByteArrayOutputStream()
-            val connection = MavlinkConnection.create(outputStream)
-            
-            // Apply signing if enabled
-            if (BuildConfig.ENABLE_MAVLINK_SIGNING && signingManager.isSigningEnabled()) {
-                // TODO: Implement signing integration with dronefleet library
-                // This would require extending the library or implementing custom encoding
-                Timber.d("MAVLink signing requested but not yet implemented")
-            }
-            
-            connection.send(systemId, componentId, message)
-            val rawBytes = outputStream.toByteArray()
-            
-            decode(rawBytes)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to encode MAVLink message")
-            null
-        }
-    }
-    
-    /**
-     * Validates a frame's signature if signing is enabled.
-     * Returns true if valid or if signing is disabled.
-     */
-    fun validateSignature(frame: MavRawFrame): Boolean {
-        if (!BuildConfig.ENABLE_MAVLINK_SIGNING || !signingManager.isSigningEnabled()) {
-            return true
-        }
-        
-        // Check if frame is MAVLink v2 with signature
-        val rawBytes = frame.rawBytes
-        if (rawBytes.isEmpty() || rawBytes[0] != MAV_STX_V2) {
-            return true // v1 frames or invalid frames pass through
-        }
-        
-        if (rawBytes.size < 12) return false
-        
-        val compatFlags = rawBytes[3].toInt() and 0xFF
-        val hasSignature = (compatFlags and 0x01) != 0
-        
-        if (!hasSignature) {
-            return true // Unsigned frames are allowed
-        }
-        
-        return signingManager.validateSignature(frame)
     }
     
     /**
