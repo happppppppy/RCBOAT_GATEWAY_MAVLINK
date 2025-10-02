@@ -76,7 +76,8 @@ class MqttGatewayService : Service() {
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
         
-        serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        // Run gateway work off the main thread to avoid UI jank
+        serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -97,18 +98,24 @@ class MqttGatewayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Timber.i("MQTT Gateway service destroyed")
-        
-        serviceScope?.cancel()
-        
-        // Stop connections
-        serviceScope?.launch {
+
+        // Perform cleanup on a fresh IO scope so it's not skipped due to cancellation
+        val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        cleanupScope.launch {
             try {
                 mqttManager.disconnect()
+            } catch (e: Exception) {
+                Timber.e(e, "Error disconnecting MQTT in onDestroy")
+            }
+            try {
                 usbSerialManager.stop()
             } catch (e: Exception) {
-                Timber.e(e, "Error stopping gateway")
+                Timber.e(e, "Error stopping USB in onDestroy")
             }
         }
+
+        // Now cancel serviceScope to stop ongoing work
+        serviceScope?.cancel()
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
@@ -130,23 +137,23 @@ class MqttGatewayService : Service() {
                 // Collect configuration
                 configRepository.configFlow.collectLatest { config ->
                     Timber.i("Configuration updated, restarting gateway")
-                    
+
                     // Stop existing connections
                     mqttManager.disconnect()
                     usbSerialManager.stop()
-                    
+
                     // Reset statistics
                     mavlinkPacketsSent = 0
                     mavlinkPacketsReceived = 0
                     mqttMessagesSent = 0
                     mqttMessagesReceived = 0
-                    
+
                     // Start USB Serial connection
                     usbSerialManager.start(config.mavlinkBaud)
-                    
-                    // Start MQTT connection
-                    mqttManager.connect(config)
-                    
+
+                    // Start MQTT connection with retry/backoff
+                    connectMqttWithRetry(config)
+
                     // Start bidirectional forwarding
                     launch { forwardUsbToMqtt() }
                     launch { forwardMqttToUsb() }
@@ -158,7 +165,30 @@ class MqttGatewayService : Service() {
             }
         }
     }
-    
+
+    private suspend fun connectMqttWithRetry(config: com.rcboat.gateway.mavlink.data.config.AppConfig) {
+        var attempt = 0
+        var delayMs = 5_000L
+        val maxDelayMs = 60_000L
+        while (currentCoroutineContext().isActive) {
+            try {
+                mqttManager.connect(config)
+                // If connect succeeds, break
+                if (mqttManager.connectionState.value is MqttConnectionState.Connected) return
+            } catch (e: Exception) {
+                // connect already logs; fallthrough to retry
+            }
+            attempt++
+            // Update notification to reflect retry schedule
+            updateNotification(
+                "MQTT: Retry #$attempt",
+                "Reconnecting in ${delayMs / 1000}s"
+            )
+            delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(maxDelayMs)
+        }
+    }
+
     /**
      * Forwards MAVLink packets from USB Serial to MQTT.
      */

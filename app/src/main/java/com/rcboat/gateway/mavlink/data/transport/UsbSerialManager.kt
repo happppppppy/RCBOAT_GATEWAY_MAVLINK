@@ -1,10 +1,13 @@
 package com.rcboat.gateway.mavlink.data.transport
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -60,28 +63,96 @@ class UsbSerialManager @Inject constructor(
     private var readJob: Job? = null
     private var writeJob: Job? = null
     private var isConnected = false
-    
+
+    // Dedicated scope for all IO operations and receiver callbacks
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // Channels for frame communication
     private val incomingFrames = Channel<MavRawFrame>(Channel.UNLIMITED)
     private val outgoingFrames = Channel<MavRawFrame>(Channel.UNLIMITED)
-    
+
     // Buffer for partial frame assembly
     private var readBuffer = ByteArray(0)
-    
+
+    // Remember last requested baud and pending device for permission callbacks
+    private var pendingBaudRate: Int = 57600
+    private var pendingDevice: UsbDevice? = null
+
+    // Receiver for USB permission and attach/detach events
+    private val usbReceiver = object : BroadcastReceiver() {
+        private fun Intent.getUsbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
+        override fun onReceive(ctx: Context, intent: Intent) {
+            when (intent.action) {
+                USB_PERMISSION_ACTION -> {
+                    val device = intent.getUsbDevice()
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    if (device != null) {
+                        if (granted) {
+                            Timber.i("USB permission granted for ${device.deviceName}")
+                            ioScope.launch {
+                                connectToDevice(device, pendingBaudRate)
+                            }
+                        } else {
+                            Timber.w("USB permission denied for ${device.deviceName}")
+                            _connectionState.value = UsbConnectionState.Error("Permission denied")
+                        }
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    val device = intent.getUsbDevice()
+                    Timber.i("USB device attached: ${device?.deviceName}")
+                    ioScope.launch {
+                        start(pendingBaudRate)
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val device = intent.getUsbDevice()
+                    Timber.i("USB device detached: ${device?.deviceName}")
+                    ioScope.launch {
+                        stop()
+                    }
+                }
+            }
+        }
+    }
+
+    init {
+        val filter = IntentFilter().apply {
+            addAction(USB_PERMISSION_ACTION)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        // Register receiver compatibly across Android versions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            context.registerReceiver(usbReceiver, filter)
+        }
+    }
+
     /**
      * Starts the USB connection process.
      * Attempts to find and connect to a compatible USB device.
      */
     suspend fun start(baudRate: Int) = withContext(Dispatchers.IO) {
         try {
+            pendingBaudRate = baudRate
             _connectionState.value = UsbConnectionState.WaitingForDevice
             
             val device = findUsbDevice()
             if (device == null) {
-                _connectionState.value = UsbConnectionState.Error("No compatible USB device found")
+                // No device yet; wait for attach broadcast
+                Timber.w("No compatible USB device found; waiting for attachment")
                 return@withContext
             }
-            
+            pendingDevice = device
+
             if (!usbManager.hasPermission(device)) {
                 requestUsbPermission(device)
                 return@withContext
@@ -118,6 +189,22 @@ class UsbSerialManager @Inject constructor(
      * Finds a compatible USB device (CDC ACM or specific vendor/product IDs).
      */
     private fun findUsbDevice(): UsbDevice? {
+        // Diagnostics: list all connected USB devices
+        try {
+            val devices = usbManager.deviceList.values
+            if (devices.isEmpty()) {
+                Timber.i("USB device list is empty")
+            } else {
+                devices.forEach { d ->
+                    Timber.i(
+                        "USB device present: name=%s vid=0x%04x pid=0x%04x class=%d",
+                        d.deviceName, d.vendorId, d.productId, d.deviceClass
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to enumerate USB devices")
+        }
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
         
         if (availableDrivers.isEmpty()) {
@@ -157,7 +244,12 @@ class UsbSerialManager @Inject constructor(
         try {
             _connectionState.value = UsbConnectionState.Connecting
             
-            val driver = currentDriver ?: throw IllegalStateException("No driver available")
+            // Ensure we have a driver for the specific device
+            val driver = currentDriver?.takeIf { it.device.deviceId == device.deviceId }
+                ?: UsbSerialProber.getDefaultProber().probeDevice(device)
+                ?: throw IllegalStateException("No driver available for device")
+            currentDriver = driver
+
             val connection = usbManager.openDevice(driver.device)
                 ?: throw IllegalStateException("Cannot open USB device")
             
@@ -188,13 +280,10 @@ class UsbSerialManager @Inject constructor(
      * Starts background coroutines for reading and writing data.
      */
     private fun startReadWriteJobs() {
-        readJob = CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
-            readLoop()
-        }
-        
-        writeJob = CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
-            writeLoop()
-        }
+        readJob?.cancel()
+        writeJob?.cancel()
+        readJob = ioScope.launch { readLoop() }
+        writeJob = ioScope.launch { writeLoop() }
     }
     
     /**
@@ -226,35 +315,46 @@ class UsbSerialManager @Inject constructor(
      */
     private suspend fun processIncomingBytes(buffer: ByteArray, length: Int) {
         // Append new bytes to read buffer
-        readBuffer += buffer.copyOf(length)
+        val incoming = buffer.copyOf(length)
+        if (readBuffer.isEmpty()) {
+            readBuffer = incoming
+        } else {
+            val newBuf = ByteArray(readBuffer.size + incoming.size)
+            System.arraycopy(readBuffer, 0, newBuf, 0, readBuffer.size)
+            System.arraycopy(incoming, 0, newBuf, readBuffer.size, incoming.size)
+            readBuffer = newBuf
+        }
         
-        var offset = 0
-        while (offset < readBuffer.size) {
-            val parseResult = mavlinkCodec.parseFrame(readBuffer, offset)
-            
-            if (parseResult != null) {
-                val (frame, consumed) = parseResult
+        var index = 0
+        val size = readBuffer.size
+        while (index < size) {
+            val b = readBuffer[index]
+            if (b != 0xFE.toByte() && b != 0xFD.toByte()) {
+                index++
+                continue
+            }
+            // Try to parse a frame from this index
+            val result = mavlinkCodec.parseFrame(readBuffer, index)
+            if (result != null) {
+                val (frame, consumed) = result
                 incomingFrames.trySend(frame)
-                offset += consumed
-                Timber.v("Received MAVLink frame: sys=${frame.systemId}, comp=${frame.componentId}, msg=${frame.messageId}")
+                index += consumed
+                Timber.v("Received MAVLink frame: sys=${'$'}{frame.systemId}, comp=${'$'}{frame.componentId}, msg=${'$'}{frame.messageId}")
+                continue
             } else {
-                // No complete frame found, try next byte
-                offset++
+                // Likely incomplete frame starting at index; keep remainder for next read
+                break
             }
         }
-        
-        // Remove processed bytes from buffer
-        if (offset > 0) {
-            readBuffer = if (offset >= readBuffer.size) {
-                ByteArray(0)
-            } else {
-                readBuffer.copyOfRange(offset, readBuffer.size)
-            }
+
+        // Drop processed bytes and retain remainder (including potential partial frame)
+        if (index > 0) {
+            readBuffer = if (index >= size) ByteArray(0) else readBuffer.copyOfRange(index, size)
         }
-        
+
         // Prevent buffer from growing too large
-        if (readBuffer.size > READ_BUFFER_SIZE * 2) {
-            Timber.w("Read buffer overflow, clearing")
+        if (readBuffer.size > READ_BUFFER_SIZE * 4) {
+            Timber.w("Read buffer overflow (${readBuffer.size} bytes), clearing")
             readBuffer = ByteArray(0)
         }
     }
@@ -269,7 +369,7 @@ class UsbSerialManager @Inject constructor(
                 val port = currentPort ?: break
                 
                 port.write(frame.rawBytes, WRITE_TIMEOUT_MS)
-                Timber.v("Sent MAVLink frame: sys=${frame.systemId}, comp=${frame.componentId}, msg=${frame.messageId}")
+                Timber.v("Sent MAVLink frame: sys=${'$'}{frame.systemId}, comp=${'$'}{frame.componentId}, msg=${'$'}{frame.messageId}")
             } catch (e: Exception) {
                 if (isConnected) {
                     Timber.e(e, "USB write error")

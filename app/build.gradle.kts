@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,13 +8,19 @@ plugins {
     kotlin("plugin.serialization") version "1.9.24"
 }
 
+// Load local.properties for MQTT defaults
+val localProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.rcboat.gateway.mavlink"
     compileSdk = 34
 
     defaultConfig {
         applicationId = "com.rcboat.gateway.mavlink"
-        minSdk = 26
+        minSdk = 33
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
@@ -21,6 +29,21 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // BuildConfig fields from local.properties (with safe fallbacks)
+        val mqttHost = (localProps.getProperty("mqtt.broker.host") ?: "").trim()
+        val mqttUser = (localProps.getProperty("mqtt.username") ?: "").trim()
+        val mqttPass = (localProps.getProperty("mqtt.password") ?: "").trim()
+        // If host looks like a bare hostname, build a tcp:// URL on default port 1883
+        val mqttUrl = when {
+            mqttHost.isBlank() -> ""
+            mqttHost.startsWith("tcp://") || mqttHost.startsWith("ssl://") -> mqttHost
+            else -> "tcp://$mqttHost:1883"
+        }
+        buildConfigField("String", "MQTT_BROKER_HOST", "\"$mqttHost\"")
+        buildConfigField("String", "MQTT_BROKER_URL", "\"$mqttUrl\"")
+        buildConfigField("String", "MQTT_USERNAME", "\"$mqttUser\"")
+        buildConfigField("String", "MQTT_PASSWORD", "\"$mqttPass\"")
     }
 
     buildTypes {

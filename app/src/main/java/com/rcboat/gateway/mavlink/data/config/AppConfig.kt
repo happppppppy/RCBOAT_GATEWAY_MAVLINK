@@ -1,6 +1,7 @@
 package com.rcboat.gateway.mavlink.data.config
 
 import kotlinx.serialization.Serializable
+import com.rcboat.gateway.mavlink.BuildConfig
 
 /**
  * Application configuration data class for MQTT-based MAVLink gateway.
@@ -9,9 +10,10 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class AppConfig(
     // MQTT Broker Configuration
-    val mqttBrokerAddress: String = "tcp://broker.hivemq.com:1883",
-    val mqttUsername: String = "",
-    val mqttPassword: String = "",
+    val mqttBrokerAddress: String = (BuildConfig.MQTT_BROKER_URL.takeIf { it.isNotBlank() }
+        ?: "tcp://broker.hivemq.com:1883"),
+    val mqttUsername: String = (BuildConfig.MQTT_USERNAME.takeIf { it.isNotBlank() } ?: ""),
+    val mqttPassword: String = (BuildConfig.MQTT_PASSWORD.takeIf { it.isNotBlank() } ?: ""),
     val boatId: String = "sea_serpent_01",
     
     // MAVLink USB Serial Settings
